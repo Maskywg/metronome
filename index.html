@@ -584,21 +584,29 @@ function playSound(isAccent) {
   el.play().catch(() => {});
 }
 
-// ── Scheduler（performance.now 計時，look-ahead 200ms）──
+// ── AudioContext（只用時鐘，不輸出音訊）──────────────
+let timingCtx = null;
+function getTimingCtx() {
+  if (!timingCtx) timingCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return timingCtx;
+}
+
+// ── Look-ahead Scheduler（AudioContext 時鐘 + HTML5 Audio 出聲）──
 let schedTimer = null;
-let nextBeatMs = 0;
-const LOOKAHEAD_MS = 200;  // 加大 look-ahead，讓排程更有緩衝
-const SCHED_MS = 25;
+let nextBeatSec = 0;   // AudioContext 秒
+const LOOKAHEAD = 0.15; // 150ms 提前排程
+const SCHED_MS  = 25;   // 每 25ms 跑一次
 
 function scheduler() {
-  const now = performance.now();
-  while (nextBeatMs < now + LOOKAHEAD_MS) {
-    const beat = currentBeat;
+  const ctx = timingCtx;
+  if (!ctx) return;
+  while (nextBeatSec < ctx.currentTime + LOOKAHEAD) {
+    const beat     = currentBeat;
     const isAccent = accentEnabled && beat === 0;
-    const delay = Math.max(0, nextBeatMs - now);
+    const delay    = Math.max(0, (nextBeatSec - ctx.currentTime) * 1000);
     setTimeout(() => { playSound(isAccent); updateBeatGridAt(beat); }, delay);
-    currentBeat = (currentBeat + 1) % beats;
-    nextBeatMs += 60000 / bpm;
+    currentBeat  = (currentBeat + 1) % beats;
+    nextBeatSec += 60.0 / bpm;
   }
   schedTimer = setTimeout(scheduler, SCHED_MS);
 }
@@ -611,8 +619,10 @@ function updateBeatGridAt(beat) {
   }
 }
 
-function startMetronome() {
+function startMetronome(ctx) {
   if (schedTimer) return;
+  currentBeat  = 1;                         // 0 已在手勢裡播了
+  nextBeatSec  = ctx.currentTime + (60.0 / bpm);
   scheduler();
   updatePendulum(true);
 }
@@ -631,13 +641,14 @@ function togglePlay() {
     isPlaying = true;
     btn.textContent = '⏹ 停止節拍';
     btn.classList.add('active');
-    // 在使用者手勢內直接播一聲，解鎖 iOS HTML5 Audio
+    // 1. 建立 / resume AudioContext（在手勢內，時鐘才會啟動）
+    const ctx = getTimingCtx();
+    ctx.resume();
+    // 2. 第一拍立即在手勢內播（解鎖 iOS HTML5 Audio）
     playSound(true);
-    // 第一拍已播，從第二拍繼續排程
-    currentBeat = 1;
-    nextBeatMs = performance.now() + (60000 / bpm);
-    scheduler();
-    updatePendulum(true);
+    updateBeatGridAt(0);
+    // 3. 後續拍用 AudioContext 時鐘精確排程
+    startMetronome(ctx);
   } else {
     isPlaying = false;
     stopMetronome();
@@ -647,7 +658,7 @@ function togglePlay() {
 }
 
 function restartIfPlaying() {
-  if (isPlaying) { stopMetronome(); startMetronome(); }
+  if (isPlaying) { stopMetronome(); startMetronome(getTimingCtx()); }
 }
 
 // ── BPM ──────────────────────────────────────────
