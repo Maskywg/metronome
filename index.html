@@ -517,24 +517,32 @@ let timerStartTime = null;
 // Tap tempo
 let tapTimes = [];
 
-// Audio context — 在使用者手勢內同步建立並解鎖
+// Audio context
 let audioCtx = null;
 
-function initAudio() {
-  if (audioCtx) return;
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  // 播靜音 buffer：iOS Safari 需要這步才會真正解鎖
-  const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  src.start(0);
+function getCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function unlockAndRun(callback) {
+  const ctx = getCtx();
+  // 播靜音 buffer 解鎖
+  try {
+    const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch(e) {}
+  // resume() 確保 running，then 之後 currentTime 才正確
+  ctx.resume().then(callback).catch(callback);
 }
 
 // ── Sound Engine ─────────────────────────────────
 function playSound(isAccent, when) {
   const ctx = audioCtx;
-  if (!ctx) return;
+  if (!ctx || ctx.state !== 'running') return;
   const t = when || ctx.currentTime;
   const gain = ctx.createGain();
   gain.connect(ctx.destination);
@@ -551,7 +559,7 @@ function playSound(isAccent, when) {
 }
 
 function playClick(ctx, gain, accent, t) {
-  const buf = ctx.createBuffer(1, ctx.sampleRate * 0.04, ctx.sampleRate);
+  const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.04), ctx.sampleRate);
   const d = buf.getChannelData(0);
   for (let i = 0; i < d.length; i++)
     d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.003));
@@ -661,12 +669,11 @@ function stopMetronome() {
 function togglePlay() {
   const btn = document.getElementById('playBtn');
   if (!isPlaying) {
-    // 同步建立 AudioContext 並解鎖（必須在手勢的同步程式碼內）
-    initAudio();
     isPlaying = true;
     btn.textContent = '⏹ 停止節拍';
     btn.classList.add('active');
-    startMetronome();
+    // unlockAndRun 在使用者手勢內呼叫 resume()，then 後 currentTime 才準確
+    unlockAndRun(startMetronome);
   } else {
     isPlaying = false;
     stopMetronome();
@@ -755,8 +762,7 @@ function selectSound(el) {
   el.classList.add('selected');
   selectedSound = el.dataset.sound;
   if (isPlaying) return;
-  initAudio();
-  playSound(true);
+  unlockAndRun(() => playSound(true, getCtx().currentTime + 0.01));
 }
 
 // ── Volume ───────────────────────────────────────
