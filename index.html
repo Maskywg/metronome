@@ -517,108 +517,91 @@ let timerStartTime = null;
 // Tap tempo
 let tapTimes = [];
 
-// Audio context
+// Audio context — 在使用者手勢內同步建立並解鎖
 let audioCtx = null;
 
-function getAudioCtx() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  return audioCtx;
-}
-
-// 播靜音 buffer 徹底解鎖 iOS WebAudio
-function unlockAudio() {
-  const ctx = getAudioCtx();
-  const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
-  const src = ctx.createBufferSource();
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  // 播靜音 buffer：iOS Safari 需要這步才會真正解鎖
+  const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+  const src = audioCtx.createBufferSource();
   src.buffer = buf;
-  src.connect(ctx.destination);
+  src.connect(audioCtx.destination);
   src.start(0);
-  return ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
 }
 
 // ── Sound Engine ─────────────────────────────────
-function playSound(isAccent) {
-  const ctx = getAudioCtx();
+function playSound(isAccent, when) {
+  const ctx = audioCtx;
+  if (!ctx) return;
+  const t = when || ctx.currentTime;
   const gain = ctx.createGain();
   gain.connect(ctx.destination);
-  gain.gain.setValueAtTime(volume * (isAccent ? 1.0 : 0.72), ctx.currentTime);
+  gain.gain.setValueAtTime(volume * (isAccent ? 1.0 : 0.72), t);
 
   switch (selectedSound) {
-    case 'click':     playClick(ctx, gain, isAccent); break;
-    case 'wood':      playWood(ctx, gain, isAccent);  break;
-    case 'beep':      playBeep(ctx, gain, isAccent);  break;
-    case 'sine':      playSine(ctx, gain, isAccent);  break;
-    case 'cowbell':   playCowbell(ctx, gain, isAccent); break;
-    case 'hihat':     playHihat(ctx, gain, isAccent);  break;
+    case 'click':   playClick(ctx, gain, isAccent, t); break;
+    case 'wood':    playWood(ctx, gain, isAccent, t);  break;
+    case 'beep':    playBeep(ctx, gain, isAccent, t);  break;
+    case 'sine':    playSine(ctx, gain, isAccent, t);  break;
+    case 'cowbell': playCowbell(ctx, gain, isAccent, t); break;
+    case 'hihat':   playHihat(ctx, gain, isAccent, t);  break;
   }
 }
 
-function playClick(ctx, gain, accent) {
+function playClick(ctx, gain, accent, t) {
   const buf = ctx.createBuffer(1, ctx.sampleRate * 0.04, ctx.sampleRate);
   const d = buf.getChannelData(0);
-  for (let i = 0; i < d.length; i++) {
+  for (let i = 0; i < d.length; i++)
     d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.003));
-  }
   const src = ctx.createBufferSource();
   src.buffer = buf;
-  const freq = accent ? 1400 : 900;
   const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = 1.5;
+  bp.type = 'bandpass'; bp.frequency.value = accent ? 1400 : 900; bp.Q.value = 1.5;
   src.connect(bp); bp.connect(gain);
-  src.start();
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.04);
+  src.start(t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
 }
 
-function playWood(ctx, gain, accent) {
-  const osc = ctx.createOscillator();
-  const freqEnv = accent ? [800, 300] : [600, 200];
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(freqEnv[0], ctx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(freqEnv[1], ctx.currentTime + 0.06);
-  osc.connect(gain);
-  osc.start(ctx.currentTime);
-  osc.stop(ctx.currentTime + 0.06);
-  gain.gain.setValueAtTime(volume * (accent ? 1 : 0.7), ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.06);
-}
-
-function playBeep(ctx, gain, accent) {
-  const osc = ctx.createOscillator();
-  osc.type = 'square';
-  osc.frequency.value = accent ? 1200 : 800;
-  osc.connect(gain);
-  osc.start(ctx.currentTime);
-  osc.stop(ctx.currentTime + 0.05);
-  gain.gain.setValueAtTime(volume * 0.3 * (accent ? 1 : 0.7), ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
-}
-
-function playSine(ctx, gain, accent) {
+function playWood(ctx, gain, accent, t) {
   const osc = ctx.createOscillator();
   osc.type = 'sine';
-  osc.frequency.value = accent ? 880 : 440;
-  osc.connect(gain);
-  osc.start(ctx.currentTime);
-  osc.stop(ctx.currentTime + 0.12);
-  gain.gain.setValueAtTime(volume * (accent ? 1 : 0.65), ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+  osc.frequency.setValueAtTime(accent ? 800 : 600, t);
+  osc.frequency.exponentialRampToValueAtTime(accent ? 300 : 200, t + 0.06);
+  osc.connect(gain); osc.start(t); osc.stop(t + 0.06);
+  gain.gain.setValueAtTime(volume * (accent ? 1 : 0.7), t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
 }
 
-function playCowbell(ctx, gain, accent) {
-  [550, 844].forEach((f, i) => {
+function playBeep(ctx, gain, accent, t) {
+  const osc = ctx.createOscillator();
+  osc.type = 'square'; osc.frequency.value = accent ? 1200 : 800;
+  osc.connect(gain); osc.start(t); osc.stop(t + 0.05);
+  gain.gain.setValueAtTime(volume * 0.3 * (accent ? 1 : 0.7), t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+}
+
+function playSine(ctx, gain, accent, t) {
+  const osc = ctx.createOscillator();
+  osc.type = 'sine'; osc.frequency.value = accent ? 880 : 440;
+  osc.connect(gain); osc.start(t); osc.stop(t + 0.12);
+  gain.gain.setValueAtTime(volume * (accent ? 1 : 0.65), t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+}
+
+function playCowbell(ctx, gain, accent, t) {
+  [550, 844].forEach(f => {
     const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.value = accent ? f * 1.2 : f;
-    osc.connect(gain);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.3);
+    osc.type = 'square'; osc.frequency.value = accent ? f * 1.2 : f;
+    osc.connect(gain); osc.start(t); osc.stop(t + 0.3);
   });
-  gain.gain.setValueAtTime(volume * 0.35 * (accent ? 1 : 0.65), ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+  gain.gain.setValueAtTime(volume * 0.35 * (accent ? 1 : 0.65), t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
 }
 
-function playHihat(ctx, gain, accent) {
-  const bufSize = ctx.sampleRate * 0.08;
+function playHihat(ctx, gain, accent, t) {
+  const bufSize = Math.floor(ctx.sampleRate * 0.08);
   const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
   const d = buf.getChannelData(0);
   for (let i = 0; i < bufSize; i++) d[i] = Math.random() * 2 - 1;
@@ -626,46 +609,66 @@ function playHihat(ctx, gain, accent) {
   src.buffer = buf;
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass'; hp.frequency.value = accent ? 7000 : 5000;
-  src.connect(hp); hp.connect(gain);
-  src.start();
-  gain.gain.setValueAtTime(volume * (accent ? 1 : 0.65), ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+  src.connect(hp); hp.connect(gain); src.start(t);
+  gain.gain.setValueAtTime(volume * (accent ? 1 : 0.65), t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
 }
 
-// ── Metronome ────────────────────────────────────
-function getInterval() { return (60 / bpm) * 1000; }
+// ── Look-ahead Scheduler（業界標準，iOS 相容）────────
+let schedNextBeat = 0;   // 下一拍的 AudioContext 時間
+let schedTimer = null;   // setTimeout handle
+const LOOKAHEAD = 0.1;   // 提前排程 100ms
+const INTERVAL  = 25;    // 每 25ms 跑一次排程
 
-function tick() {
-  currentBeat = (currentBeat + 1) % beats;
-  const isAccent = accentEnabled && currentBeat === 0;
-  playSound(isAccent);
-  updateBeatGrid();
+function scheduler() {
+  while (audioCtx && schedNextBeat < audioCtx.currentTime + LOOKAHEAD) {
+    const isAccent = accentEnabled && currentBeat === 0;
+    playSound(isAccent, schedNextBeat);
+    // 視覺更新安排在最接近該拍的時間
+    const delay = Math.max(0, (schedNextBeat - audioCtx.currentTime) * 1000);
+    const beat = currentBeat;
+    setTimeout(() => updateBeatGridAt(beat), delay);
+    currentBeat = (currentBeat + 1) % beats;
+    schedNextBeat += 60.0 / bpm;
+  }
+  schedTimer = setTimeout(scheduler, INTERVAL);
+}
+
+function updateBeatGridAt(beat) {
+  for (let i = 0; i < beats; i++) {
+    const dot = document.getElementById(`beat-${i}`);
+    if (!dot) continue;
+    dot.className = 'beat-dot' + (i === 0 && accentEnabled ? ' accent' : '') + (i === beat ? ' lit' : '');
+  }
 }
 
 function startMetronome() {
-  if (intervalId) return;
-  currentBeat = -1;
-  tick();
-  intervalId = setInterval(tick, getInterval());
+  if (schedTimer) return;
+  currentBeat = 0;
+  schedNextBeat = audioCtx.currentTime + 0.05;
+  scheduler();
   updatePendulum(true);
 }
 
 function stopMetronome() {
-  clearInterval(intervalId);
-  intervalId = null;
+  clearTimeout(schedTimer);
+  schedTimer = null;
   currentBeat = -1;
   updateBeatGrid();
   updatePendulum(false);
 }
 
 function togglePlay() {
-  isPlaying = !isPlaying;
   const btn = document.getElementById('playBtn');
-  if (isPlaying) {
+  if (!isPlaying) {
+    // 同步建立 AudioContext 並解鎖（必須在手勢的同步程式碼內）
+    initAudio();
+    isPlaying = true;
     btn.textContent = '⏹ 停止節拍';
     btn.classList.add('active');
-    unlockAudio().then(() => startMetronome());
+    startMetronome();
   } else {
+    isPlaying = false;
     stopMetronome();
     btn.textContent = '▶ 開始節拍';
     btn.classList.remove('active');
@@ -673,10 +676,7 @@ function togglePlay() {
 }
 
 function restartIfPlaying() {
-  if (isPlaying) {
-    stopMetronome();
-    startMetronome();
-  }
+  if (isPlaying) { stopMetronome(); startMetronome(); }
 }
 
 // ── BPM ──────────────────────────────────────────
@@ -754,10 +754,9 @@ function selectSound(el) {
   document.querySelectorAll('.sound-btn').forEach(b => b.classList.remove('selected'));
   el.classList.add('selected');
   selectedSound = el.dataset.sound;
-  // Preview
   if (isPlaying) return;
-  getAudioCtx();
-  setTimeout(() => playSound(true), 50);
+  initAudio();
+  playSound(true);
 }
 
 // ── Volume ───────────────────────────────────────
@@ -889,9 +888,7 @@ setPendulumDuration();
 applyTimerSet();
 updateTimerDisplay();
 
-// ── iOS Audio Unlock（第一次觸碰即解鎖）────────────
-document.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
-document.addEventListener('click', unlockAudio, { once: true });
+// iOS 不需要額外解鎖監聽，initAudio() 已在按鈕點擊同步執行
 
 // ── PWA Service Worker ────────────────────────────
 if ('serviceWorker' in navigator) {
