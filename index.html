@@ -900,26 +900,22 @@ setPendulumDuration();
 applyTimerSet();
 updateTimerDisplay();
 
-// ── 診斷用測試聲音 ────────────────────────────────
+// ── 診斷用測試聲音（每次建新 context，直接接 destination 最大音量）
 function testBeep() {
   try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const dbg = document.getElementById('debugMsg');
-    dbg.textContent = 'AudioContext state: ' + audioCtx.state;
-    audioCtx.resume().then(() => {
-      dbg.textContent = 'resumed → state: ' + audioCtx.state;
-      const osc = audioCtx.createOscillator();
-      const g = audioCtx.createGain();
+    ctx.resume().then(() => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
       osc.frequency.value = 880;
-      g.gain.setValueAtTime(0.5, audioCtx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
-      osc.connect(g); g.connect(audioCtx.destination);
-      osc.start(audioCtx.currentTime);
-      osc.stop(audioCtx.currentTime + 0.4);
-      setTimeout(() => { dbg.textContent += ' | currentTime=' + audioCtx.currentTime.toFixed(3); }, 100);
+      osc.connect(ctx.destination); // 直接接，無 gain 節點
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 1.0);
+      dbg.textContent = '✅ state:' + ctx.state + ' | t=' + ctx.currentTime.toFixed(3) + ' | 應有 1 秒 880Hz 聲音';
     });
   } catch(e) {
-    document.getElementById('debugMsg').textContent = '錯誤：' + e.message;
+    document.getElementById('debugMsg').textContent = '❌ ' + e.message;
   }
 }
 
