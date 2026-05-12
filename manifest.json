@@ -2,7 +2,7 @@
   "name": "節拍器 Metronome",
   "short_name": "節拍器",
   "description": "可調整音效、拍號與計時的專業節拍器",
-  "start_url": "./metronome.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f1117",
   "theme_color": "#6c63ff",
