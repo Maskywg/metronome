@@ -494,6 +494,12 @@
   ▶ 開始節拍
 </button>
 
+<!-- ── 診斷按鈕 ── -->
+<button onclick="testBeep()" style="max-width:520px;width:100%;background:#333;color:#fff;border:2px dashed #6c63ff;border-radius:10px;padding:12px;font-size:0.9rem;">
+  🔔 測試聲音（直接點這個有聲音嗎？）
+</button>
+<div id="debugMsg" style="max-width:520px;width:100%;text-align:center;color:#7b7d8e;font-size:0.8rem;padding:4px 0;"></div>
+
 <script>
 // ── State ──────────────────────────────────────────
 let bpm = 120;
@@ -894,7 +900,28 @@ setPendulumDuration();
 applyTimerSet();
 updateTimerDisplay();
 
-// iOS 不需要額外解鎖監聽，initAudio() 已在按鈕點擊同步執行
+// ── 診斷用測試聲音 ────────────────────────────────
+function testBeep() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const dbg = document.getElementById('debugMsg');
+    dbg.textContent = 'AudioContext state: ' + audioCtx.state;
+    audioCtx.resume().then(() => {
+      dbg.textContent = 'resumed → state: ' + audioCtx.state;
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.frequency.value = 880;
+      g.gain.setValueAtTime(0.5, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+      osc.connect(g); g.connect(audioCtx.destination);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 0.4);
+      setTimeout(() => { dbg.textContent += ' | currentTime=' + audioCtx.currentTime.toFixed(3); }, 100);
+    });
+  } catch(e) {
+    document.getElementById('debugMsg').textContent = '錯誤：' + e.message;
+  }
+}
 
 // ── PWA Service Worker ────────────────────────────
 if ('serviceWorker' in navigator) {
