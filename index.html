@@ -558,18 +558,36 @@ const soundUrls = {};
   soundUrls[t] = { accent: makeWav(genSamples(t,true)), normal: makeWav(genSamples(t,false)) };
 });
 
-// 播放聲音：HTML5 Audio（iOS 相容）
-function playSound(isAccent) {
-  const url = soundUrls[selectedSound][isAccent ? 'accent' : 'normal'];
-  const a = new Audio(url);
-  a.volume = volume;
-  a.play().catch(() => {});
+// Audio 池：每種音效預先建立 8 個 Audio 元素，避免每拍重新建立
+const POOL = 8;
+const pools = {};
+function buildPools() {
+  ['click','wood','beep','sine','cowbell','hihat'].forEach(t => {
+    pools[t] = { a: [], n: [], ai: 0, ni: 0 };
+    for (let i = 0; i < POOL; i++) {
+      const ea = new Audio(soundUrls[t].accent); ea.preload = 'auto'; ea.load();
+      const en = new Audio(soundUrls[t].normal);  en.preload = 'auto'; en.load();
+      pools[t].a.push(ea);
+      pools[t].n.push(en);
+    }
+  });
 }
 
-// ── Scheduler（performance.now 計時，不依賴 AudioContext）──
+// 播放聲音（從池中輪流取出，reset 後播放）
+function playSound(isAccent) {
+  const p = pools[selectedSound];
+  const arr = isAccent ? p.a : p.n;
+  const idx = isAccent ? (p.ai++ % POOL) : (p.ni++ % POOL);
+  const el = arr[idx];
+  el.volume = volume;
+  el.currentTime = 0;
+  el.play().catch(() => {});
+}
+
+// ── Scheduler（performance.now 計時，look-ahead 200ms）──
 let schedTimer = null;
 let nextBeatMs = 0;
-const LOOKAHEAD_MS = 100;
+const LOOKAHEAD_MS = 200;  // 加大 look-ahead，讓排程更有緩衝
 const SCHED_MS = 25;
 
 function scheduler() {
@@ -595,8 +613,6 @@ function updateBeatGridAt(beat) {
 
 function startMetronome() {
   if (schedTimer) return;
-  currentBeat = 0;
-  nextBeatMs = performance.now();
   scheduler();
   updatePendulum(true);
 }
@@ -615,7 +631,13 @@ function togglePlay() {
     isPlaying = true;
     btn.textContent = '⏹ 停止節拍';
     btn.classList.add('active');
-    startMetronome();
+    // 在使用者手勢內直接播一聲，解鎖 iOS HTML5 Audio
+    playSound(true);
+    // 第一拍已播，從第二拍繼續排程
+    currentBeat = 1;
+    nextBeatMs = performance.now() + (60000 / bpm);
+    scheduler();
+    updatePendulum(true);
   } else {
     isPlaying = false;
     stopMetronome();
@@ -822,6 +844,7 @@ buildBeatGrid();
 setPendulumDuration();
 applyTimerSet();
 updateTimerDisplay();
+buildPools(); // 預先建立 Audio 池
 
 // ── PWA Service Worker ────────────────────────────
 if ('serviceWorker' in navigator) {
