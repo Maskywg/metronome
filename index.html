@@ -556,32 +556,20 @@ const soundUrls = {};
   soundUrls[t] = { accent: makeWav(genSamples(t,true)), normal: makeWav(genSamples(t,false)) };
 });
 
-const POOL = 10;
-const pools = {};
-function buildPools() {
+const audioPlayers = {};
+function buildAudioPlayers() {
   ['click','wood','beep','sine','cowbell','hihat'].forEach(t => {
-    pools[t] = { a: [], n: [], ai: 0, ni: 0 };
-    for (let i = 0; i < POOL; i++) {
-      const ea = new Audio(soundUrls[t].accent);
-      const en = new Audio(soundUrls[t].normal);
-      ea.preload = 'auto';
-      en.preload = 'auto';
-      ea.playsInline = true;
-      en.playsInline = true;
-      ea.load();
-      en.load();
-      pools[t].a.push(ea);
-      pools[t].n.push(en);
-    }
+    const el = new Audio(soundUrls[t].accent);
+    el.preload = 'auto';
+    el.playsInline = true;
+    el.load();
+    audioPlayers[t] = el;
   });
 }
 
 function playSound(isAccent) {
-  const p = pools[selectedSound];
-  if (!p) return;
-  const arr = isAccent ? p.a : p.n;
-  const idx = isAccent ? (p.ai++ % POOL) : (p.ni++ % POOL);
-  const el = arr[idx];
+  const el = audioPlayers[selectedSound];
+  if (!el) return;
   el.muted = false;
   el.volume = volume;
   el.currentTime = 0;
@@ -862,7 +850,7 @@ buildBeatGrid();
 setPendulumDuration();
 applyTimerSet();
 updateTimerDisplay();
-buildPools();
+buildAudioPlayers();
 
 // ── PWA Service Worker ────────────────────────────
 if ('serviceWorker' in navigator) {
