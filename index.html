@@ -556,55 +556,63 @@ const soundUrls = {};
   soundUrls[t] = { accent: makeWav(genSamples(t,true)), normal: makeWav(genSamples(t,false)) };
 });
 
-const audioPlayers = {};
+// 每種音效各建 8 個 Audio 元素（accent/normal 分開），輪流使用避免截斷
+const POOL = 8;
+const pools = {};
 function buildAudioPlayers() {
   ['click','wood','beep','sine','cowbell','hihat'].forEach(t => {
-    const el = new Audio(soundUrls[t].accent);
-    el.preload = 'auto';
-    el.playsInline = true;
-    el.load();
-    audioPlayers[t] = el;
+    pools[t] = { a: [], n: [], ai: 0, ni: 0 };
+    for (let i = 0; i < POOL; i++) {
+      const ea = Object.assign(new Audio(soundUrls[t].accent), { preload:'auto' });
+      const en = Object.assign(new Audio(soundUrls[t].normal),  { preload:'auto' });
+      ea.load(); en.load();
+      pools[t].a.push(ea);
+      pools[t].n.push(en);
+    }
   });
 }
 
 function playSound(isAccent) {
-  const el = audioPlayers[selectedSound];
-  if (!el) return;
-  el.muted = false;
+  const p = pools[selectedSound];
+  if (!p) return;
+  const arr = isAccent ? p.a : p.n;
+  const el  = arr[(isAccent ? p.ai++ : p.ni++) % POOL];
   el.volume = volume;
   el.currentTime = 0;
-  el.play().catch(err => {
-    console.warn('Metronome audio play failed:', err && err.message ? err.message : err);
-  });
+  el.play().catch(() => {});
 }
 
-// ── Look-ahead Scheduler（HTML Audio 出聲 + 絕對時間校準）──
+// ── AudioContext（只做時鐘，不出聲）────────────────
+let timingCtx = null;
+function getTimingCtx() {
+  if (!timingCtx) timingCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return timingCtx;
+}
+
+// ── Look-ahead Scheduler（AudioContext 時鐘精準 + HTML5 Audio 出聲）──
 let schedTimer = null;
-let nextBeatMs = 0;
+let nextBeatSec = 0;
 let visualTimers = [];
-const LOOKAHEAD_MS = 120;
-const SCHED_MS  = 25;   // 每 25ms 跑一次
+const LOOKAHEAD = 0.15; // 150ms
+const SCHED_MS  = 25;
 
 function scheduler() {
-  const now = performance.now();
-  while (nextBeatMs < now + LOOKAHEAD_MS) {
+  const ctx = timingCtx;
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  while (nextBeatSec < now + LOOKAHEAD) {
     const beat     = currentBeat;
     const isAccent = accentEnabled && beat === 0;
-    scheduleBeat(beat, isAccent, nextBeatMs);
+    const delay    = Math.max(0, (nextBeatSec - now) * 1000);
+    const timer = setTimeout(() => {
+      playSound(isAccent);
+      updateBeatGridAt(beat);
+    }, delay);
+    visualTimers.push(timer);
     currentBeat  = (currentBeat + 1) % beats;
-    nextBeatMs += 60000 / bpm;
+    nextBeatSec += 60.0 / bpm;
   }
   schedTimer = setTimeout(scheduler, SCHED_MS);
-}
-
-function scheduleBeat(beat, isAccent, whenMs) {
-  const delay = Math.max(0, whenMs - performance.now());
-  const timer = setTimeout(() => {
-    playSound(isAccent);
-    updateBeatGridAt(beat);
-    visualTimers = visualTimers.filter(id => id !== timer);
-  }, delay);
-  visualTimers.push(timer);
 }
 
 function updateBeatGridAt(beat) {
@@ -615,10 +623,12 @@ function updateBeatGridAt(beat) {
   }
 }
 
-function startMetronome(firstBeatAlreadyPlayed = false) {
+function startMetronome() {
   if (schedTimer) return;
-  currentBeat = firstBeatAlreadyPlayed ? (1 % beats) : 0;
-  nextBeatMs = performance.now() + (firstBeatAlreadyPlayed ? (60000 / bpm) : 40);
+  const ctx = getTimingCtx();
+  ctx.resume();
+  currentBeat  = 1;
+  nextBeatSec  = ctx.currentTime + (60.0 / bpm);
   scheduler();
   updatePendulum(true);
 }
@@ -639,9 +649,10 @@ function togglePlay() {
     isPlaying = true;
     btn.textContent = '⏹ 停止節拍';
     btn.classList.add('active');
+    // 第一拍在手勢內同步播（解鎖 iOS HTML5 Audio）
     playSound(true);
     updateBeatGridAt(0);
-    startMetronome(true);
+    startMetronome();
   } else {
     isPlaying = false;
     stopMetronome();
