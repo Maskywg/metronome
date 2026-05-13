@@ -566,6 +566,8 @@ function buildPools() {
       const en = new Audio(soundUrls[t].normal);
       ea.preload = 'auto';
       en.preload = 'auto';
+      ea.playsInline = true;
+      en.playsInline = true;
       ea.load();
       en.load();
       pools[t].a.push(ea);
@@ -580,26 +582,11 @@ function playSound(isAccent) {
   const arr = isAccent ? p.a : p.n;
   const idx = isAccent ? (p.ai++ % POOL) : (p.ni++ % POOL);
   const el = arr[idx];
+  el.muted = false;
   el.volume = volume;
   el.currentTime = 0;
-  el.play().catch(() => {});
-}
-
-function unlockAudioPool() {
-  const p = pools[selectedSound];
-  if (!p) return;
-  [...p.a.slice(0, 2), ...p.n.slice(0, 2)].forEach(el => {
-    const oldVolume = el.volume;
-    el.volume = 0;
-    el.play()
-      .then(() => {
-        el.pause();
-        el.currentTime = 0;
-        el.volume = oldVolume;
-      })
-      .catch(() => {
-        el.volume = oldVolume;
-      });
+  el.play().catch(err => {
+    console.warn('Metronome audio play failed:', err && err.message ? err.message : err);
   });
 }
 
@@ -664,7 +651,6 @@ function togglePlay() {
     isPlaying = true;
     btn.textContent = '⏹ 停止節拍';
     btn.classList.add('active');
-    unlockAudioPool();
     playSound(true);
     updateBeatGridAt(0);
     startMetronome(true);
