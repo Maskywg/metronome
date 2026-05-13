@@ -504,7 +504,6 @@ let isPlaying = false;
 let accentEnabled = true;
 let selectedSound = 'click';
 let volume = 0.8;
-let intervalId = null;
 
 // Timer state
 let timerMode = 'count'; // 'count' | 'down'
@@ -518,24 +517,8 @@ let timerStartTime = null;
 // Tap tempo
 let tapTimes = [];
 
-// ── WAV 生成（純 JS，不需 Web Audio API）────────────
+// ── Web Audio sound buffers ───────────────────────
 const SR = 44100;
-
-function makeWav(samples) {
-  const n = samples.length;
-  const buf = new ArrayBuffer(44 + n * 2);
-  const v = new DataView(buf);
-  const s = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
-  s(0,'RIFF'); v.setUint32(4, 36+n*2, true);
-  s(8,'WAVE'); s(12,'fmt ');
-  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
-  v.setUint32(24,SR,true); v.setUint32(28,SR*2,true);
-  v.setUint16(32,2,true); v.setUint16(34,16,true);
-  s(36,'data'); v.setUint32(40,n*2,true);
-  for (let i = 0; i < n; i++)
-    v.setInt16(44+i*2, Math.max(-32767,Math.min(32767, samples[i]*32767)), true);
-  return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
-}
 
 function genSamples(type, accent) {
   const amp = accent ? 0.9 : 0.6;
@@ -552,49 +535,59 @@ function genSamples(type, accent) {
   return Float32Array.from({length:n}, (_,i) => c.fn(i,n) * amp);
 }
 
-// 預生成所有音效的 WAV URL
-const soundUrls = {};
+const soundSamples = {};
 ['click','wood','beep','sine','cowbell','hihat'].forEach(t => {
-  soundUrls[t] = { accent: makeWav(genSamples(t,true)), normal: makeWav(genSamples(t,false)) };
+  soundSamples[t] = { accent: genSamples(t, true), normal: genSamples(t, false) };
 });
 
-// Audio 池：每種音效預先建立 8 個 Audio 元素，避免每拍重新建立
-const POOL = 8;
-const pools = {};
-function buildPools() {
-  ['click','wood','beep','sine','cowbell','hihat'].forEach(t => {
-    pools[t] = { a: [], n: [], ai: 0, ni: 0 };
-    for (let i = 0; i < POOL; i++) {
-      const ea = new Audio(soundUrls[t].accent); ea.preload = 'auto'; ea.load();
-      const en = new Audio(soundUrls[t].normal);  en.preload = 'auto'; en.load();
-      pools[t].a.push(ea);
-      pools[t].n.push(en);
-    }
-  });
-}
-
-// 播放聲音（從池中輪流取出，reset 後播放）
-function playSound(isAccent) {
-  const p = pools[selectedSound];
-  const arr = isAccent ? p.a : p.n;
-  const idx = isAccent ? (p.ai++ % POOL) : (p.ni++ % POOL);
-  const el = arr[idx];
-  el.volume = volume;
-  el.currentTime = 0;
-  el.play().catch(() => {});
-}
-
-// ── AudioContext（只用時鐘，不輸出音訊）──────────────
 let timingCtx = null;
+const audioBuffers = {};
+
 function getTimingCtx() {
-  if (!timingCtx) timingCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!timingCtx) {
+    timingCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    buildAudioBuffers(timingCtx);
+  }
   return timingCtx;
 }
 
-// ── Look-ahead Scheduler（AudioContext 時鐘 + HTML5 Audio 出聲）──
+function buildAudioBuffers(ctx) {
+  Object.entries(soundSamples).forEach(([type, pair]) => {
+    audioBuffers[type] = {
+      accent: makeAudioBuffer(ctx, pair.accent),
+      normal: makeAudioBuffer(ctx, pair.normal)
+    };
+  });
+}
+
+function makeAudioBuffer(ctx, samples) {
+  const buffer = ctx.createBuffer(1, samples.length, SR);
+  buffer.copyToChannel(samples, 0);
+  return buffer;
+}
+
+function playSoundAt(isAccent, when = getTimingCtx().currentTime) {
+  const ctx = getTimingCtx();
+  const pair = audioBuffers[selectedSound];
+  if (!pair) return;
+
+  const source = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  source.buffer = isAccent ? pair.accent : pair.normal;
+  gain.gain.setValueAtTime(volume, when);
+  source.connect(gain).connect(ctx.destination);
+  source.start(when);
+}
+
+function playSound(isAccent) {
+  playSoundAt(isAccent);
+}
+
+// ── Look-ahead Scheduler（AudioContext 時鐘直接排音）──
 let schedTimer = null;
-let nextBeatSec = 0;   // AudioContext 秒
-const LOOKAHEAD = 0.15; // 150ms 提前排程
+let nextBeatSec = 0;
+let visualTimers = [];
+const LOOKAHEAD = 0.25; // 提前排到音訊時間軸，降低長時間抖動
 const SCHED_MS  = 25;   // 每 25ms 跑一次
 
 function scheduler() {
@@ -603,12 +596,23 @@ function scheduler() {
   while (nextBeatSec < ctx.currentTime + LOOKAHEAD) {
     const beat     = currentBeat;
     const isAccent = accentEnabled && beat === 0;
-    const delay    = Math.max(0, (nextBeatSec - ctx.currentTime) * 1000);
-    setTimeout(() => { playSound(isAccent); updateBeatGridAt(beat); }, delay);
+    scheduleBeat(beat, isAccent, nextBeatSec);
     currentBeat  = (currentBeat + 1) % beats;
     nextBeatSec += 60.0 / bpm;
   }
   schedTimer = setTimeout(scheduler, SCHED_MS);
+}
+
+function scheduleBeat(beat, isAccent, when) {
+  const ctx = getTimingCtx();
+  playSoundAt(isAccent, when);
+
+  const visualDelay = Math.max(0, (when - ctx.currentTime) * 1000);
+  const timer = setTimeout(() => {
+    updateBeatGridAt(beat);
+    visualTimers = visualTimers.filter(id => id !== timer);
+  }, visualDelay);
+  visualTimers.push(timer);
 }
 
 function updateBeatGridAt(beat) {
@@ -621,8 +625,8 @@ function updateBeatGridAt(beat) {
 
 function startMetronome(ctx) {
   if (schedTimer) return;
-  currentBeat  = 1;                         // 0 已在手勢裡播了
-  nextBeatSec  = ctx.currentTime + (60.0 / bpm);
+  currentBeat = 0;
+  nextBeatSec = ctx.currentTime + 0.04;
   scheduler();
   updatePendulum(true);
 }
@@ -630,6 +634,8 @@ function startMetronome(ctx) {
 function stopMetronome() {
   clearTimeout(schedTimer);
   schedTimer = null;
+  visualTimers.forEach(clearTimeout);
+  visualTimers = [];
   currentBeat = -1;
   updateBeatGrid();
   updatePendulum(false);
@@ -641,14 +647,8 @@ function togglePlay() {
     isPlaying = true;
     btn.textContent = '⏹ 停止節拍';
     btn.classList.add('active');
-    // 1. 建立 / resume AudioContext（在手勢內，時鐘才會啟動）
     const ctx = getTimingCtx();
-    ctx.resume();
-    // 2. 第一拍立即在手勢內播（解鎖 iOS HTML5 Audio）
-    playSound(true);
-    updateBeatGridAt(0);
-    // 3. 後續拍用 AudioContext 時鐘精確排程
-    startMetronome(ctx);
+    ctx.resume().then(() => startMetronome(ctx));
   } else {
     isPlaying = false;
     stopMetronome();
@@ -658,7 +658,11 @@ function togglePlay() {
 }
 
 function restartIfPlaying() {
-  if (isPlaying) { stopMetronome(); startMetronome(getTimingCtx()); }
+  if (isPlaying) {
+    const ctx = getTimingCtx();
+    stopMetronome();
+    startMetronome(ctx);
+  }
 }
 
 // ── BPM ──────────────────────────────────────────
@@ -836,8 +840,8 @@ function timerFinished() {
   timerRunning = false;
   document.getElementById('timerBtn').textContent = '開始';
   document.getElementById('timerBtn').classList.remove('active');
-  // 結束提示音（三響，用 HTML5 Audio）
-  [0, 200, 400].forEach(delay => setTimeout(() => playSound(true), delay));
+  const ctx = getTimingCtx();
+  [0, 0.2, 0.4].forEach(delay => playSoundAt(true, ctx.currentTime + delay));
   setTimeout(() => {
     document.getElementById('timerDisplay').classList.remove('running','warning');
   }, 1000);
@@ -855,7 +859,6 @@ buildBeatGrid();
 setPendulumDuration();
 applyTimerSet();
 updateTimerDisplay();
-buildPools(); // 預先建立 Audio 池
 
 // ── PWA Service Worker ────────────────────────────
 if ('serviceWorker' in navigator) {
